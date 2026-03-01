@@ -1,0 +1,14 @@
+*.png
+*.pyc
+.DS_Store
+.mcp.json
+.playwright-mcp/
+.playwright-mcp/*.png
+.qtcreator/
+.qtcreator/CMakeLists.txt.user
+DS_Store
+__pycache__/
+build/
+mcp_server/.venv/
+mcp_server/__pycache__/server.cpython-311.pyc
+mcp_server/uv.lock
