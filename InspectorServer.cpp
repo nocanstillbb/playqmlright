@@ -10,7 +10,6 @@
 #include <QScreen>
 #include <QGuiApplication>
 #include <QBuffer>
-#include <QCursor>
 #include <QMouseEvent>
 #include <QHoverEvent>
 #include <QWheelEvent>
@@ -20,6 +19,7 @@
 #include <QColor>
 #include <QUrl>
 #include <QDateTime>
+#include <QThread>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -226,11 +226,14 @@ QJsonObject InspectorServer::handleRequest(const QJsonObject &req)
         {QStringLiteral("mouse_click"),   [this](const QJsonObject &p){ return cmdMouseClick(p); }},
         {QStringLiteral("mouse_move"),    [this](const QJsonObject &p){ return cmdMouseMove(p); }},
         {QStringLiteral("mouse_scroll"),  [this](const QJsonObject &p){ return cmdMouseScroll(p); }},
+        {QStringLiteral("mouse_drag"),    [this](const QJsonObject &p){ return cmdMouseDrag(p); }},
         {QStringLiteral("key_press"),     [this](const QJsonObject &p){ return cmdKeyPress(p); }},
         {QStringLiteral("type_text"),     [this](const QJsonObject &p){ return cmdTypeText(p); }},
         {QStringLiteral("find_item"),     [this](const QJsonObject &p){ return cmdFindItem(p); }},
         {QStringLiteral("get_properties"),[this](const QJsonObject &p){ return cmdGetProperties(p); }},
         {QStringLiteral("get_window_info"),[this](const QJsonObject &p){ return cmdGetWindowInfo(p); }},
+        {QStringLiteral("focus_item"),    [this](const QJsonObject &p){ return cmdFocusItem(p); }},
+        {QStringLiteral("set_property"),  [this](const QJsonObject &p){ return cmdSetProperty(p); }},
     };
 
     auto it = dispatch.find(method);
@@ -388,6 +391,14 @@ QQuickWindow *InspectorServer::mainWindow()
     return nullptr;
 }
 
+static quint64 nextTimestamp()
+{
+    // Monotonically increasing timestamp (ms) so QQuickDeliveryAgent can
+    // properly track event sequences (double-click detection, etc.).
+    static quint64 ts = 1;
+    return ts++;
+}
+
 static void sendMouseEvent(QQuickWindow *win, QEvent::Type type,
                            qreal x, qreal y, Qt::MouseButton btn,
                            Qt::MouseButtons btns, Qt::KeyboardModifiers mods)
@@ -396,6 +407,7 @@ static void sendMouseEvent(QQuickWindow *win, QEvent::Type type,
     const QPointF global = win->mapToGlobal(local.toPoint());
     QMouseEvent ev(type, local, local, global, btn, btns, mods,
                    QPointingDevice::primaryPointingDevice());
+    ev.setTimestamp(nextTimestamp());
     QCoreApplication::sendEvent(win, &ev);
 }
 
@@ -410,20 +422,15 @@ QJsonObject InspectorServer::cmdMouseMove(const QJsonObject &params)
     const QPointF local(x, y);
     const QPointF global = win->mapToGlobal(local.toPoint());
 
-    // Move the OS cursor (needed for Qt Quick to deliver hover to the right item).
-    QCursor::setPos(global.toPoint());
-
-    // Send a standard MouseMove event (no buttons pressed).
+    // Send a MouseMove – QQuickDeliveryAgent internally generates hover
+    // events for items with acceptHoverEvents() == true.
     sendMouseEvent(win, QEvent::MouseMove, x, y,
                    Qt::NoButton, Qt::NoButton, Qt::NoModifier);
 
-    // Also send an explicit HoverMove so that QQuickHoverHandler (and
-    // HoverHandler in QML) sees the event even on platforms where a
-    // synthetic MouseMove alone is not enough to trigger hover state.
+    // Explicit HoverMove as fallback so QQuickHoverHandler / HoverHandler
+    // sees the event even when a synthetic MouseMove alone is not enough.
     {
-        // Use a slightly different "old" position so the event looks like real motion.
         const QPointF oldLocal(x - 1.0, y - 1.0);
-        const QPointF oldGlobal = win->mapToGlobal(oldLocal.toPoint());
         QHoverEvent hev(QEvent::HoverMove, local, global, oldLocal,
                         Qt::NoModifier, QPointingDevice::primaryPointingDevice());
         QCoreApplication::sendEvent(win, &hev);
@@ -449,17 +456,29 @@ QJsonObject InspectorServer::cmdMouseClick(const QJsonObject &params)
     const Qt::KeyboardModifiers mods =
         parseModifiers(params[QStringLiteral("modifiers")].toArray());
 
-    QCursor::setPos(win->mapToGlobal(QPoint(static_cast<int>(x), static_cast<int>(y))));
+    // Move to position first (triggers hover delivery).
     sendMouseEvent(win, QEvent::MouseMove, x, y, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
 
+    // pressDuration: ms to hold the button down so the pressed state is visible.
+    const int holdMs = params[QStringLiteral("pressDuration")].toInt(80);
+
     if (clicks == 2) {
-        // Double-click: press, release, press, release, dblclick
+        // Double-click: two rapid press+release cycles so Qt Quick's internal
+        // double-click detection fires (QQuickDeliveryAgent tracks timing
+        // between consecutive presses rather than relying on DblClick type).
         sendMouseEvent(win, QEvent::MouseButtonPress,   x, y, btn, btn, mods);
+        QCoreApplication::processEvents();
         sendMouseEvent(win, QEvent::MouseButtonRelease, x, y, btn, Qt::NoButton, mods);
-        sendMouseEvent(win, QEvent::MouseButtonDblClick,x, y, btn, btn, mods);
+        QCoreApplication::processEvents();
+        // Second click — must arrive within QStyleHints::mouseDoubleClickInterval().
+        sendMouseEvent(win, QEvent::MouseButtonPress,   x, y, btn, btn, mods);
+        QCoreApplication::processEvents();
+        if (holdMs > 0) QThread::msleep(holdMs);
         sendMouseEvent(win, QEvent::MouseButtonRelease, x, y, btn, Qt::NoButton, mods);
     } else {
         sendMouseEvent(win, QEvent::MouseButtonPress,   x, y, btn, btn, mods);
+        QCoreApplication::processEvents();
+        if (holdMs > 0) QThread::msleep(holdMs);
         sendMouseEvent(win, QEvent::MouseButtonRelease, x, y, btn, Qt::NoButton, mods);
     }
 
@@ -490,8 +509,44 @@ QJsonObject InspectorServer::cmdMouseScroll(const QJsonObject &params)
     return QJsonObject{{QStringLiteral("ok"), true}};
 }
 
+QJsonObject InspectorServer::cmdMouseDrag(const QJsonObject &params)
+{
+    QQuickWindow *win = mainWindow();
+    if (!win) { QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("No window"); return e; }
+
+    const qreal x1 = params[QStringLiteral("startX")].toDouble();
+    const qreal y1 = params[QStringLiteral("startY")].toDouble();
+    const qreal x2 = params[QStringLiteral("endX")].toDouble();
+    const qreal y2 = params[QStringLiteral("endY")].toDouble();
+    const int steps = qMax(2, params[QStringLiteral("steps")].toInt(10));
+    const int stepMs = qMax(1, params[QStringLiteral("stepMs")].toInt(16));
+
+    const Qt::MouseButton btn = Qt::LeftButton;
+    const Qt::KeyboardModifiers mods =
+        parseModifiers(params[QStringLiteral("modifiers")].toArray());
+
+    // Move to start, press
+    sendMouseEvent(win, QEvent::MouseMove, x1, y1, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    sendMouseEvent(win, QEvent::MouseButtonPress, x1, y1, btn, btn, mods);
+    QCoreApplication::processEvents();
+
+    // Interpolate movement
+    for (int i = 1; i <= steps; ++i) {
+        const qreal t = static_cast<qreal>(i) / steps;
+        const qreal cx = x1 + (x2 - x1) * t;
+        const qreal cy = y1 + (y2 - y1) * t;
+        sendMouseEvent(win, QEvent::MouseMove, cx, cy, Qt::NoButton, btn, mods);
+        QCoreApplication::processEvents();
+        QThread::msleep(stepMs);
+    }
+
+    // Release at end
+    sendMouseEvent(win, QEvent::MouseButtonRelease, x2, y2, btn, Qt::NoButton, mods);
+
+    return QJsonObject{{QStringLiteral("ok"), true}};
+}
+
 // ---------------------------------------------------------------------------
-// Keyboard helpers
 // ---------------------------------------------------------------------------
 
 static void sendKey(QQuickWindow *win, Qt::Key key,
@@ -663,5 +718,78 @@ QJsonObject InspectorServer::cmdGetWindowInfo(const QJsonObject &)
                         {QStringLiteral("height"), scr->availableGeometry().height()}};
         result[QStringLiteral("screen")] = screen;
     }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Command: focus_item
+// ---------------------------------------------------------------------------
+
+QJsonObject InspectorServer::cmdFocusItem(const QJsonObject &params)
+{
+    const QString ptr = params[QStringLiteral("ptr")].toString();
+    if (ptr.isEmpty()) {
+        QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("ptr required"); return e;
+    }
+
+    QObject *obj = objectByPtr(ptr);
+    if (!obj) {
+        QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("Object not found"); return e;
+    }
+
+    auto *item = qobject_cast<QQuickItem *>(obj);
+    if (!item) {
+        QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("Object is not a QQuickItem"); return e;
+    }
+
+    const QString reason = params[QStringLiteral("reason")].toString(QStringLiteral("OtherFocusReason"));
+    Qt::FocusReason fr = Qt::OtherFocusReason;
+    if (reason == QLatin1String("MouseFocusReason"))    fr = Qt::MouseFocusReason;
+    else if (reason == QLatin1String("TabFocusReason")) fr = Qt::TabFocusReason;
+
+    item->forceActiveFocus(fr);
+
+    QJsonObject result;
+    result[QStringLiteral("ok")]          = true;
+    result[QStringLiteral("activeFocus")] = item->hasActiveFocus();
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Command: set_property
+// ---------------------------------------------------------------------------
+
+QJsonObject InspectorServer::cmdSetProperty(const QJsonObject &params)
+{
+    const QString ptr = params[QStringLiteral("ptr")].toString();
+    if (ptr.isEmpty()) {
+        QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("ptr required"); return e;
+    }
+
+    const QString propName = params[QStringLiteral("property")].toString();
+    if (propName.isEmpty()) {
+        QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("property name required"); return e;
+    }
+
+    QObject *obj = objectByPtr(ptr);
+    if (!obj) {
+        QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("Object not found"); return e;
+    }
+
+    const QJsonValue jsonVal = params[QStringLiteral("value")];
+    QVariant val;
+    if (jsonVal.isBool())        val = jsonVal.toBool();
+    else if (jsonVal.isDouble()) val = jsonVal.toDouble();
+    else if (jsonVal.isString()) val = jsonVal.toString();
+    else {
+        QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("value must be bool, number, or string"); return e;
+    }
+
+    if (!obj->setProperty(propName.toLatin1(), val)) {
+        QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("Failed to set property (does it exist and is it writable?)"); return e;
+    }
+
+    QJsonObject result;
+    result[QStringLiteral("ok")] = true;
     return result;
 }

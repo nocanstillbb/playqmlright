@@ -57,11 +57,14 @@ private:
     QJsonObject cmdMouseClick(const QJsonObject &params);
     QJsonObject cmdMouseMove(const QJsonObject &params);
     QJsonObject cmdMouseScroll(const QJsonObject &params);
+    QJsonObject cmdMouseDrag(const QJsonObject &params);
     QJsonObject cmdKeyPress(const QJsonObject &params);
     QJsonObject cmdTypeText(const QJsonObject &params);
     QJsonObject cmdFindItem(const QJsonObject &params);
     QJsonObject cmdGetProperties(const QJsonObject &params);
     QJsonObject cmdGetWindowInfo(const QJsonObject &params);
+    QJsonObject cmdFocusItem(const QJsonObject &params);
+    QJsonObject cmdSetProperty(const QJsonObject &params);
 
     // Serialise a QObject (and its visual subtree) to JSON.
     QJsonObject serializeObject(QObject *obj, int depth, int maxDepth);

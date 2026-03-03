@@ -6,8 +6,13 @@ int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
 
+    const bool testMode = app.arguments().contains(QStringLiteral("--test"));
+
     QQmlApplicationEngine engine;
-    const QUrl url(QStringLiteral("qrc:/qml_mcp/main.qml"));
+    const QUrl url = testMode
+        ? QUrl(QStringLiteral("qrc:/qml_mcp/example/TestBench.qml"))
+        : QUrl(QStringLiteral("qrc:/qml_mcp/main.qml"));
+
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreated,

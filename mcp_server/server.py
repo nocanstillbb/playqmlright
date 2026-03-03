@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-Qt Quick MCP Inspector Server
-==============================
+Qt Quick MCP Inspector Server (Background Automation)
+=====================================================
 Exposes the running Qt Quick application to Claude Code via the Model Context
 Protocol (MCP).  Communicates with the Qt app over TCP (127.0.0.1) using
 a simple newline-delimited JSON-RPC protocol.
+
+All UI interactions (click, hover, focus, input) are performed via synthetic
+Qt events injected directly into the QQuickWindow event loop.  No real
+mouse/keyboard control is used and the window does NOT need to be in the
+foreground.
 
 Usage
 -----
@@ -36,6 +41,8 @@ mcp = FastMCP(
     "qt-quick-inspector",
     instructions=(
         "Tools for inspecting and controlling a running Qt Quick / QML application. "
+        "All interactions are background-only – no real mouse/keyboard is used and "
+        "the window does not need to be in the foreground. "
         "Use dump_qt_tree to understand the UI structure, take_screenshot to see "
         "the current visual state, and the input tools to interact with the UI."
     ),
@@ -103,7 +110,7 @@ async def dump_qt_tree(max_depth: int = 50) -> str:
     Returns a JSON string describing every visible UI element with its:
     - type (QML / C++ class name)
     - objectName
-    - ptr (unique address, use with get_item_properties)
+    - ptr (unique address, use with get_item_properties / focus_item)
     - geometry (parent-relative x/y/width/height)
     - sceneGeometry (window-relative x/y/width/height) – use these for click coords
     - visible / enabled / opacity / z
@@ -197,6 +204,54 @@ async def get_item_properties(ptr: str) -> str:
 
 
 @mcp.tool()
+async def focus_item(
+    ptr: str,
+    reason: str = "OtherFocusReason",
+) -> str:
+    """
+    Programmatically set keyboard focus on a QML item.
+
+    Uses QQuickItem::forceActiveFocus() to give the item active focus,
+    without needing a real mouse click or the window to be in the foreground.
+    This is useful before typing text into a TextInput/TextField.
+
+    Args:
+        ptr:    Hex pointer string of the target item (from dump_qt_tree / find_item).
+        reason: Focus reason – "OtherFocusReason" (default), "MouseFocusReason",
+                or "TabFocusReason".
+    """
+    resp = await qt_request("focus_item", {"ptr": ptr, "reason": reason})
+    result = _unwrap(resp)
+    return json.dumps(result)
+
+
+@mcp.tool()
+async def set_property(
+    ptr: str,
+    property_name: str,
+    value: str | float | bool,
+) -> str:
+    """
+    Set a Q_PROPERTY value on a QML item programmatically.
+
+    Supports bool, number, and string values.  This allows direct
+    manipulation of QML item state without UI interaction.
+
+    Args:
+        ptr:           Hex pointer string of the target item.
+        property_name: Name of the property to set (e.g. "text", "visible", "opacity").
+        value:         New value (bool, number, or string).
+    """
+    resp = await qt_request("set_property", {
+        "ptr": ptr,
+        "property": property_name,
+        "value": value,
+    })
+    result = _unwrap(resp)
+    return json.dumps(result)
+
+
+@mcp.tool()
 async def click(
     x: float,
     y: float,
@@ -205,7 +260,10 @@ async def click(
     modifiers: list[str] | None = None,
 ) -> str:
     """
-    Click the mouse at window-relative coordinates.
+    Simulate a mouse click at window-relative coordinates (background, no real cursor).
+
+    Uses synthetic QMouseEvent injected via sendEvent – no real mouse is moved
+    and the window does not need to be in the foreground.
 
     Use sceneGeometry values from dump_qt_tree for the x/y coordinates
     (these are in logical pixels, not physical screen pixels).
@@ -228,10 +286,48 @@ async def click(
 
 
 @mcp.tool()
+async def mouse_drag(
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    steps: int = 10,
+    step_ms: int = 16,
+    modifiers: list[str] | None = None,
+) -> str:
+    """
+    Simulate a mouse drag from one point to another (background, no real cursor).
+
+    Useful for dragging sliders, resizing, reordering, etc.  Performs a press at
+    (start_x, start_y), interpolates movement in `steps` increments with `step_ms`
+    delay each, then releases at (end_x, end_y).
+
+    Args:
+        start_x:   Start X (window logical pixels).
+        start_y:   Start Y.
+        end_x:     End X.
+        end_y:     End Y.
+        steps:     Number of intermediate move events (default 10).
+        step_ms:   Milliseconds between each step (default 16, ~60fps).
+        modifiers: Modifier keys list.
+    """
+    resp = await qt_request("mouse_drag", {
+        "startX": start_x, "startY": start_y,
+        "endX": end_x, "endY": end_y,
+        "steps": steps, "stepMs": step_ms,
+        "modifiers": modifiers or [],
+    })
+    result = _unwrap(resp)
+    return json.dumps(result)
+
+
+@mcp.tool()
 async def mouse_move(x: float, y: float) -> str:
     """
-    Move the mouse cursor to window-relative coordinates without clicking.
-    Useful for triggering hover/enter effects.
+    Simulate mouse movement to window-relative coordinates (background, no real cursor).
+
+    Triggers hover/enter effects via synthetic QMouseEvent + QHoverEvent.
+    The real OS cursor is NOT moved.
 
     Args:
         x: Window-relative X coordinate (logical pixels).
@@ -251,7 +347,7 @@ async def scroll(
     modifiers: list[str] | None = None,
 ) -> str:
     """
-    Send a mouse wheel scroll event at window-relative coordinates.
+    Simulate a mouse wheel scroll event at window-relative coordinates.
 
     Args:
         x:         Window-relative X coordinate.
@@ -276,7 +372,10 @@ async def key_press(
     modifiers: list[str] | None = None,
 ) -> str:
     """
-    Press and release a keyboard key.
+    Simulate a keyboard key press and release (background, no real keyboard).
+
+    The key event is sent to the currently focused QML item.  Use focus_item
+    to direct focus to a specific item first if needed.
 
     Special key names: Return, Enter, Escape, Tab, Backspace, Delete, Insert,
     Left, Right, Up, Down, Home, End, PageUp, PageDown, Space, F1–F12.
@@ -298,10 +397,10 @@ async def key_press(
 @mcp.tool()
 async def type_text(text: str) -> str:
     """
-    Type a string of characters into the focused widget, one character at a time.
+    Type a string of characters into the focused widget (background, no real keyboard).
 
-    Useful for filling text fields.  First click on the field to focus it, then
-    call this tool.
+    Sends synthetic QKeyEvents one character at a time.  First use focus_item
+    or click on the field to give it focus, then call this tool.
 
     Args:
         text: The string to type.

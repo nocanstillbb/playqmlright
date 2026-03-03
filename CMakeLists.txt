@@ -18,6 +18,7 @@ qt_add_qml_module(appqml_mcp
     VERSION 1.0
     QML_FILES
         main.qml
+        example/TestBench.qml
 )
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
