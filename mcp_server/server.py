@@ -138,7 +138,7 @@ async def take_screenshot() -> Image:
     resp = await qt_request("screenshot")
     result = _unwrap(resp)
     b64 = result["image"]
-    return Image(data=b64, format="png")
+    return Image(data=base64.b64decode(b64), format="png")
 
 
 @mcp.tool()
