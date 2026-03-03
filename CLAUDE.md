@@ -119,7 +119,7 @@ cd mcp_server && uv run python ../example/test_bench.py --fast
 ```
 
 **已知注意事项：**
-- 双击使用 `TapHandler.onDoubleTapped`（`MouseArea.onDoubleClicked` 对合成事件无效）
+- 双击事件序列为 `Press→Release→Press→DblClick→Release`，同时兼容 `MouseArea.onDoubleClicked` 和 `TapHandler.onDoubleTapped`
 - 合成事件需要单调递增的时间戳（`QPointerEvent::setTimestamp`）
 - 点击需要 press/release 之间加 `processEvents()` + `msleep()` 才能看到按下状态
 

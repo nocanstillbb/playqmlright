@@ -99,7 +99,7 @@ ApplicationWindow {
                         objectName: "btnDouble"
                         width: btnDoubleLabel.implicitWidth + 24
                         height: 25
-                        color: btnDoubleTap.pressed ? "#D0D0D0" : "#F0F0F0"
+                        color: "#F0F0F0"
                         border.width: 1
                         border.color: "#999"
                         radius: 4
@@ -110,9 +110,9 @@ ApplicationWindow {
                             text: "Double-click me"
                         }
 
-                        TapHandler {
-                            id: btnDoubleTap
-                            onDoubleTapped: root.log("btnDouble: double-clicked!")
+                        MouseArea {
+                            anchors.fill: parent
+                            onDoubleClicked: root.log("btnDouble: double-clicked!")
                         }
                     }
                 }

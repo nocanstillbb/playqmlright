@@ -463,15 +463,23 @@ QJsonObject InspectorServer::cmdMouseClick(const QJsonObject &params)
     const int holdMs = params[QStringLiteral("pressDuration")].toInt(80);
 
     if (clicks == 2) {
-        // Double-click: two rapid press+release cycles so Qt Quick's internal
-        // double-click detection fires (QQuickDeliveryAgent tracks timing
-        // between consecutive presses rather than relying on DblClick type).
+        // Double-click: two rapid press+release cycles.
+        // TapHandler detects double-click from two rapid press+release cycles.
+        // MouseArea requires a MouseButtonDblClick event type.
+        // Strategy: send the native sequence Press→Release→DblClick→Release
+        // then also a second Press→Release so TapHandler sees two taps.
+
+        // --- First click (normal) ---
         sendMouseEvent(win, QEvent::MouseButtonPress,   x, y, btn, btn, mods);
         QCoreApplication::processEvents();
         sendMouseEvent(win, QEvent::MouseButtonRelease, x, y, btn, Qt::NoButton, mods);
         QCoreApplication::processEvents();
-        // Second click — must arrive within QStyleHints::mouseDoubleClickInterval().
+
+        // --- Second click (for TapHandler) + DblClick (for MouseArea) ---
         sendMouseEvent(win, QEvent::MouseButtonPress,   x, y, btn, btn, mods);
+        QCoreApplication::processEvents();
+        // Also send DblClick for MouseArea.onDoubleClicked
+        sendMouseEvent(win, QEvent::MouseButtonDblClick, x, y, btn, btn, mods);
         QCoreApplication::processEvents();
         if (holdMs > 0) QThread::msleep(holdMs);
         sendMouseEvent(win, QEvent::MouseButtonRelease, x, y, btn, Qt::NoButton, mods);
