@@ -6,17 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repo is a **Qt Quick UI automation toolkit** with two components:
 
-1. **`qmlinspector/`** — A Qt 6 C++ application that embeds an inspector TCP server inside a QML app, enabling external tools to inspect and control the UI via synthetic events.
+1. **`qmlinspector/`** — A Qt 6 C++ dynamic library (`libqmlinspector`) that embeds a TCP inspector server inside any QML app, enabling external tools to inspect and control the UI via synthetic events.
 2. **`playqmlright/`** — A Python MCP server that bridges Claude Code to the Qt app's TCP inspector protocol.
+3. **`qmlapp/`** — An example/test QML application (optional build target).
 
-## Build & Run
+## Build & Run (Standalone)
 
 ```bash
-# Configure + build (from repo root)
+# Build only the library (default)
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 
-# Run app (empty window + inspector server on :37521)
+# Build library + example app
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPLAYQMLRIGHT_BUILD_EXAMPLE_QMLAPP=ON
+cmake --build build
+
+# Run example app (empty window + inspector on :37521)
 ./build/qmlapp/appqmlapp.app/Contents/MacOS/appqmlapp
 
 # Run test bench UI
@@ -28,34 +33,125 @@ pkill -f appqmlapp
 
 CMake requires: `Qt6::Quick Qt6::Network` (Qt 6.2+).
 
-## Install (library for external use)
+## Standalone Test Bench
+
+A Python script that exercises every inspector feature end-to-end against the example app.
 
 ```bash
-cmake --install build --prefix /usr/local   # installs headers + dylib + CMake package
+# 1. Start the example app in test mode
+./build/qmlapp/appqmlapp.app/Contents/MacOS/appqmlapp --test &
+
+# 2. Run the test script
+python3 qmlapp/example/test_bench.py
+python3 qmlapp/example/test_bench.py --fast   # shorter delays between steps
+```
+
+## Install (library for use in other projects)
+
+```bash
+cmake --install build --prefix /usr/local
 ```
 
 Installed layout:
 - `include/qmlinspector/InspectorServer.h`
 - `lib/libqmlinspector.dylib`
-- `lib/cmake/qmlinspector/qmlinspectorConfig.cmake`  ← use with `find_package(qmlinspector)`
+- `lib/cmake/qmlinspector/qmlinspectorConfig.cmake`
 
-## MCP Server
+---
 
-```bash
-# Start MCP server manually (normally launched automatically by Claude Code via .mcp.json)
-uv run --project playqmlright python playqmlright/server.py
-```
+## Integrating into Another QML Project via Git Submodule
 
-The `.mcp.json` at the repo root configures Claude Code to auto-launch the MCP server. Port defaults to `37521`; override with `QML_INSPECTOR_PORT` env var on both the Qt app and the MCP server.
+### Step 1 — Add as submodule
 
-## Test Bench
-
-A standalone Python script that exercises every inspector feature end-to-end. Requires the Qt app running with `--test`:
+In the **target project** root:
 
 ```bash
-python3 qmlapp/example/test_bench.py
-python3 qmlapp/example/test_bench.py --fast   # shorter delays
+git submodule add https://github.com/yourorg/playqmlright.git third_party/playqmlright
+git submodule update --init --recursive
 ```
+
+### Step 2 — Add to CMakeLists.txt
+
+In the target project's **root `CMakeLists.txt`**, add the submodule before the executable target:
+
+```cmake
+# Only build the library, not the example app
+add_subdirectory(third_party/playqmlright/qmlinspector)
+```
+
+Then link the inspector to the app target:
+
+```cmake
+target_link_libraries(myapp PRIVATE qmlinspector)
+```
+
+### Step 3 — Embed InspectorServer in main.cpp
+
+```cpp
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <InspectorServer.h>   // from the submodule
+
+int main(int argc, char *argv[])
+{
+    QGuiApplication app(argc, argv);
+    QQmlApplicationEngine engine;
+
+    // ... load your QML ...
+
+    InspectorServer inspector(&engine);
+    const quint16 port = []() -> quint16 {
+        const QByteArray env = qgetenv("QML_INSPECTOR_PORT");
+        if (!env.isEmpty()) {
+            bool ok = false; int p = env.toInt(&ok);
+            if (ok && p > 0 && p < 65536) return static_cast<quint16>(p);
+        }
+        return 37521;
+    }();
+    if (!inspector.start(port))
+        qWarning("InspectorServer failed to start.");
+
+    return app.exec();
+}
+```
+
+### Step 4 — Configure .mcp.json in the target project
+
+Create (or edit) `.mcp.json` at the **target project root** to point the MCP server at the submodule's Python package:
+
+```json
+{
+  "mcpServers": {
+    "playqmlright": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "third_party/playqmlright/playqmlright",
+        "python",
+        "third_party/playqmlright/playqmlright/server.py"
+      ],
+      "env": {
+        "QML_INSPECTOR_PORT": "37521"
+      }
+    }
+  }
+}
+```
+
+> The `QML_INSPECTOR_PORT` env var is read by both `server.py` (MCP side) and the Qt app (`qgetenv("QML_INSPECTOR_PORT")`). Change it if port 37521 conflicts.
+
+### Step 5 — Open the target project in Claude Code
+
+```bash
+cd /path/to/your-qml-project
+claude
+```
+
+Claude Code will auto-launch the MCP server via `.mcp.json`. The `mcp__playqmlright__*` tools (`dump_qt_tree`, `take_screenshot`, `click`, etc.) will then control your running QML app.
+
+---
 
 ## Architecture
 
@@ -66,7 +162,7 @@ Claude Code
 playqmlright/server.py   (FastMCP, stdio transport)
     │  newline-delimited JSON-RPC over TCP 127.0.0.1:37521
     ▼
-qmlinspector/InspectorServer.cpp   (QTcpServer embedded in Qt app)
+qmlinspector/InspectorServer.cpp   (QTcpServer embedded in any Qt app)
     │  synthetic QMouseEvent / QKeyEvent / QHoverEvent / QWheelEvent
     ▼
 QQuickWindow / QML visual tree
@@ -87,25 +183,8 @@ QQuickWindow / QML visual tree
 - `find_item` matches by `objectName` (exact), `type` (class name substring, case-insensitive), or a property name/value pair.
 - Double-click sends `Press→Release→Press→DblClick→Release` to support both `MouseArea` and `TapHandler`.
 
-## Adding New QML to the App
+## Adding New QML to the Example App
 
 `qmlapp/main.qml` is the production window; `qmlapp/example/TestBench.qml` is the test UI (`--test` flag). Both are registered in `qmlapp/CMakeLists.txt` via `qt_add_qml_module` (URI `qmlapp`). Add new QML files to the `QML_FILES` list there.
 
 To add new inspector commands: add a handler method to `qmlinspector/InspectorServer.h/.cpp`, register it in the `dispatch` table in `handleRequest()`, then add a corresponding `@mcp.tool()` in `playqmlright/server.py`.
-
-## Using the Library in Another Project
-
-After installing, add to your `CMakeLists.txt`:
-
-```cmake
-find_package(qmlinspector REQUIRED)
-target_link_libraries(myapp PRIVATE qmlinspector::qmlinspector)
-```
-
-Then in C++:
-```cpp
-#include <InspectorServer.h>
-// ...
-InspectorServer inspector(&engine);
-inspector.start(37521);
-```

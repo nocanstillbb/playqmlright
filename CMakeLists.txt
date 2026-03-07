@@ -10,7 +10,7 @@ find_package(Qt6 6.2 COMPONENTS Quick Network REQUIRED)
 
 add_subdirectory(qmlinspector)
 
-option(BUILD_QMLAPP "Build the example QML application" OFF)
-if(BUILD_QMLAPP)
+option(PLAYQMLRIGHT_BUILD_EXAMPLE_QMLAPP "Build the example QML application" OFF)
+if(PLAYQMLRIGHT_BUILD_EXAMPLE_QMLAPP)
     add_subdirectory(qmlapp)
 endif()
