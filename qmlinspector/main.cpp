@@ -10,8 +10,8 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     const QUrl url = testMode
-        ? QUrl(QStringLiteral("qrc:/qml_mcp/example/TestBench.qml"))
-        : QUrl(QStringLiteral("qrc:/qml_mcp/main.qml"));
+        ? QUrl(QStringLiteral("qrc:/qml_inspector/example/TestBench.qml"))
+        : QUrl(QStringLiteral("qrc:/qml_inspector/main.qml"));
 
     QObject::connect(
         &engine,
