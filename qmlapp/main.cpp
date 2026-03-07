@@ -1,6 +1,6 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
-#include "InspectorServer.h"
+#include <InspectorServer.h>
 
 int main(int argc, char *argv[])
 {
@@ -10,8 +10,8 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     const QUrl url = testMode
-        ? QUrl(QStringLiteral("qrc:/qml_inspector/example/TestBench.qml"))
-        : QUrl(QStringLiteral("qrc:/qml_inspector/main.qml"));
+        ? QUrl(QStringLiteral("qrc:/qmlapp/example/TestBench.qml"))
+        : QUrl(QStringLiteral("qrc:/qmlapp/main.qml"));
 
     QObject::connect(
         &engine,

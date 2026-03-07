@@ -1,41 +1,53 @@
-cmake_minimum_required(VERSION 3.16)
-
-project(qml_inspector VERSION 0.1 LANGUAGES CXX)
-
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-find_package(Qt6 6.2 COMPONENTS Quick Network REQUIRED)
-
-qt_add_executable(appqml_inspector
-    main.cpp
+add_library(qmlinspector SHARED
     InspectorServer.h
     InspectorServer.cpp
 )
 
-qt_add_qml_module(appqml_inspector
-    URI qml_inspector
-    VERSION 1.0
-    QML_FILES
-        main.qml
-        example/TestBench.qml
+target_include_directories(qmlinspector
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:include/qmlinspector>
 )
 
-# Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
-# If you are developing for iOS or macOS you should consider setting an
-# explicit, fixed bundle identifier manually though.
-set_target_properties(appqml_inspector PROPERTIES
-#    MACOSX_BUNDLE_GUI_IDENTIFIER com.example.appqml_inspector
-    MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
-    MACOSX_BUNDLE TRUE
-    WIN32_EXECUTABLE TRUE
+target_link_libraries(qmlinspector
+    PUBLIC  Qt6::Quick
+    PRIVATE Qt6::Network
 )
 
-target_link_libraries(appqml_inspector
-    PRIVATE Qt6::Quick Qt6::Network)
+set_target_properties(qmlinspector PROPERTIES
+    VERSION   ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+)
+
+# ── Install ────────────────────────────────────────────────────────────────
 
 include(GNUInstallDirs)
-install(TARGETS appqml_inspector
-    BUNDLE DESTINATION .
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+include(CMakePackageConfigHelpers)
+
+install(TARGETS qmlinspector
+    EXPORT  qmlinspectorTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(FILES InspectorServer.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/qmlinspector
+)
+
+install(EXPORT qmlinspectorTargets
+    FILE      qmlinspectorTargets.cmake
+    NAMESPACE qmlinspector::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qmlinspector
+)
+
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/qmlinspectorConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qmlinspector
+)
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/qmlinspectorConfig.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qmlinspector
+)

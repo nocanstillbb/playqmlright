@@ -6,7 +6,7 @@ Usage:
     python3 example/test_bench.py [--fast]
 
 Requires the Qt app to be running with --test flag:
-    ./build/appqml_mcp --test
+    ./build/qmlapp/appqmlapp.app/Contents/MacOS/appqmlapp --test
 """
 import asyncio
 import json
