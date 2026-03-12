@@ -352,7 +352,7 @@ QJsonObject InspectorServer::cmdDumpTree(const QJsonObject &params)
 // Command: screenshot
 // ---------------------------------------------------------------------------
 
-QJsonObject InspectorServer::cmdScreenshot(const QJsonObject &)
+QJsonObject InspectorServer::cmdScreenshot(const QJsonObject &params)
 {
     QQuickWindow *win = mainWindow();
     if (!win) {
@@ -364,16 +364,38 @@ QJsonObject InspectorServer::cmdScreenshot(const QJsonObject &)
         QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("grabWindow returned null"); return e;
     }
 
+    const qreal dpr = win->devicePixelRatio();
+    QImage outImg = img;
+
+    // Optional: crop to a specific item by ptr
+    const QString ptrStr = params.value(QStringLiteral("ptr")).toString();
+    if (!ptrStr.isEmpty()) {
+        QObject *obj = objectByPtr(ptrStr);
+        auto *item = qobject_cast<QQuickItem *>(obj);
+        if (!item) {
+            QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("Item not found or not a QQuickItem"); return e;
+        }
+        // Map item rect to window (scene) coordinates, then scale by DPR
+        QRectF sceneRect = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+        QRect pixelRect(qRound(sceneRect.x() * dpr), qRound(sceneRect.y() * dpr),
+                        qRound(sceneRect.width() * dpr), qRound(sceneRect.height() * dpr));
+        pixelRect = pixelRect.intersected(img.rect());
+        if (pixelRect.isEmpty()) {
+            QJsonObject e; e[QStringLiteral("error")] = QStringLiteral("Item has zero visible area"); return e;
+        }
+        outImg = img.copy(pixelRect);
+    }
+
     QByteArray bytes;
     QBuffer buf(&bytes);
     buf.open(QIODevice::WriteOnly);
-    img.save(&buf, "PNG");
+    outImg.save(&buf, "PNG");
 
     QJsonObject result;
     result[QStringLiteral("image")]  = QString::fromLatin1(bytes.toBase64());
-    result[QStringLiteral("width")]  = img.width();
-    result[QStringLiteral("height")] = img.height();
-    result[QStringLiteral("dpr")]    = win->devicePixelRatio();
+    result[QStringLiteral("width")]  = outImg.width();
+    result[QStringLiteral("height")] = outImg.height();
+    result[QStringLiteral("dpr")]    = dpr;
     return result;
 }
 

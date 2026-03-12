@@ -126,7 +126,7 @@ async def dump_qt_tree(max_depth: int = 50) -> str:
 
 
 @mcp.tool()
-async def take_screenshot() -> Image:
+async def take_screenshot(ptr: str = "") -> Image:
     """
     Capture a screenshot of the Qt Quick window.
 
@@ -134,8 +134,16 @@ async def take_screenshot() -> Image:
     dimensions are larger than the logical window size (dpr > 1).  The 'dpr'
     field in dump_qt_tree / get_window_info tells you the scale factor.
     Use logical coordinates (sceneGeometry) for click / key operations.
+
+    Args:
+        ptr: Optional hex pointer string of a specific QML item (from
+             dump_qt_tree / find_item).  When provided, the screenshot is
+             cropped to that item's bounding rectangle.
     """
-    resp = await qt_request("screenshot")
+    params = {}
+    if ptr:
+        params["ptr"] = ptr
+    resp = await qt_request("screenshot", params)
     result = _unwrap(resp)
     b64 = result["image"]
     return Image(data=base64.b64decode(b64), format="png")
